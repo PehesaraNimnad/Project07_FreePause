@@ -1,17 +1,40 @@
+-- Free pause menu: ESC and P open this menu instead of GTA's (same key handling as Project07_PauseMenu).
 local open = false
+local allowVanilla, allowVanillaUntil, vanillaSeen, suppressUntil = false, 0, false, 0
 
 local function nui(action, data) SendNUIMessage({ action = action, data = data }) end
 
-local function close()
+local function vanillaOpening()
+    if IsPauseMenuActive() then return true end
+    local s = GetPauseMenuState and GetPauseMenuState()
+    return s ~= nil and s ~= 0
+end
+
+local function killVanilla()
+    SetPauseMenuActive(false)
+    SetFrontendActive(false)
+end
+
+local function close(handingOff)
     if not open then return end
     open = false
     SetNuiFocus(false, false)
     nui('close')
     if Config.blur then TriggerScreenblurFadeOut(300) end
+    if handingOff then return end
+    -- the key that closed us must not open GTA's menu right after
+    suppressUntil = GetGameTimer() + 900
+    CreateThread(function()
+        local untilT = suppressUntil
+        while GetGameTimer() < untilT and not allowVanilla do
+            if vanillaOpening() then killVanilla() end
+            Wait(0)
+        end
+    end)
 end
 
 local function show()
-    if open or IsNuiFocused() or IsPauseMenuActive() or not LocalPlayer.state.isLoggedIn then return end
+    if open or GetGameTimer() < suppressUntil or not LocalPlayer.state.isLoggedIn then return end
     local pd = P7H.Framework.GetPlayerData() or {}
     local info = lib.callback.await('p07fpause:info', false) or {}
     local ci = pd.charinfo or {}
@@ -33,15 +56,75 @@ local function show()
     })
 end
 
--- ESC opens this menu instead of the GTA one (P still opens the GTA map menu)
+--- hands the screen to a GTA menu (settings) for a moment
+local function openVanilla(menuHash)
+    close(true)
+    allowVanilla, allowVanillaUntil = true, GetGameTimer() + 3000
+    CreateThread(function()
+        Wait(100)
+        for _ = 1, 5 do
+            if IsPauseMenuActive() then return end
+            ActivateFrontendMenu(menuHash, false, -1)
+            Wait(150)
+        end
+    end)
+end
+
+--- the GTA map full screen, without the pause tabs; back / ESC / P closes it
+local function openMapOnly()
+    close(true)
+    allowVanilla, allowVanillaUntil = true, GetGameTimer() + 3000
+    CreateThread(function()
+        Wait(100)
+        ActivateFrontendMenu(`FE_MENU_VERSION_MP_PAUSE`, false, -1)
+        local limit = GetGameTimer() + 2000
+        while not IsPauseMenuActive() and GetGameTimer() < limit do Wait(0) end
+        Wait(150)
+        PauseMenuceptionGoDeeper(0)
+        while IsPauseMenuActive() do
+            allowVanillaUntil = GetGameTimer() + 1000
+            DisableControlAction(0, 205, true)
+            DisableControlAction(0, 206, true)
+            for _, control in ipairs({ 177, 199, 200, 202 }) do
+                DisableControlAction(0, control, true)
+                if IsDisabledControlJustPressed(0, control) then
+                    SetFrontendActive(false)
+                    break
+                end
+            end
+            Wait(0)
+        end
+    end)
+end
+
+-- input: ESC (200) and P (199)
 CreateThread(function()
     while true do
-        if not open and LocalPlayer.state.isLoggedIn then
-            DisableControlAction(0, 200, true)
-            if IsDisabledControlJustReleased(0, 200) and not IsPauseMenuActive() and not IsNuiFocused() then show() end
+        if not LocalPlayer.state.isLoggedIn then
+            Wait(500)
+        elseif allowVanilla then
+            if IsPauseMenuActive() then
+                vanillaSeen = true
+            elseif vanillaSeen or GetGameTimer() > allowVanillaUntil then
+                allowVanilla, vanillaSeen = false, false
+                suppressUntil = GetGameTimer() + 350
+            end
             Wait(0)
         else
-            Wait(250)
+            DisableControlAction(0, 199, true) -- P
+            DisableControlAction(0, 200, true) -- ESC
+            local pressed = IsDisabledControlJustPressed(0, 199) or IsDisabledControlJustPressed(0, 200)
+            local vanilla = vanillaOpening()
+            if pressed or vanilla then
+                local suppressed = GetGameTimer() < suppressUntil
+                local otherUi = not open and IsNuiFocused()
+                if vanilla then killVanilla() end
+                if not suppressed and not otherUi then
+                    if pressed and open then close()
+                    elseif not open then CreateThread(show) end
+                end
+            end
+            Wait(0)
         end
     end
 end)
@@ -52,11 +135,9 @@ RegisterNUICallback('action', function(d, cb)
     if a == 'resume' then
         close()
     elseif a == 'map' then
-        close()
-        ActivateFrontendMenu(`FE_MENU_VERSION_MP_PAUSE`, false, -1)
+        openMapOnly()
     elseif a == 'settings' then
-        close()
-        ActivateFrontendMenu(`FE_MENU_VERSION_LANDING_MENU`, false, -1)
+        openVanilla(`FE_MENU_VERSION_LANDING_MENU`)
     elseif a == 'quit' then
         TriggerServerEvent('p07fpause:quit')
     end

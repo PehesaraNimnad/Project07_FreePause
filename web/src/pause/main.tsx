@@ -40,7 +40,7 @@ function App() {
   const close = () => { setData(null); void nui('close'); };
   useKeys((e) => {
     if (!data) return;
-    if (e.key === 'Escape') close();
+    if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') close();
     else if (e.key === 'ArrowDown') { setSel((s) => Math.min(data.buttons.length - 1, s + 1)); setArmed(false); }
     else if (e.key === 'ArrowUp') { setSel((s) => Math.max(0, s - 1)); setArmed(false); }
     else if (e.key === 'Enter') run(data.buttons[sel]);
